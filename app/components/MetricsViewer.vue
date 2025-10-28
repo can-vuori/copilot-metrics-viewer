@@ -82,6 +82,51 @@
           </div>
         </v-card-item>
       </v-card>
+
+      <v-card elevation="4" color="white" variant="elevated" class="mx-auto my-3" style="width: 300px; height: 175px;">
+        <v-card-item>
+          <div class="tiles-text">
+            <div class="spacing-10"/>
+            <v-tooltip location="bottom start" open-on-hover open-delay="200" close-delay="200">
+              <template #activator="{ props }">
+                <div v-bind="props" class="text-h6 mb-1">Total Lines of Code Accepted</div>
+              </template>
+              <v-card class="pa-2" style="background-color: #f0f0f0; max-width: 350px;">
+                <span class="text-caption" style="font-size: 10px !important;">The total lines of code accepted by users (full acceptances) offering insights into how much of the suggested code is actually being utilized and incorporated into the codebase.</span>
+              </v-card>
+            </v-tooltip>
+            <div class="text-caption">
+              {{ dateRangeDescription }}
+            </div>
+            <p class="text-h4">{{ cumulativeNumberLOCAccepted }}</p>
+          </div>
+        </v-card-item>
+      </v-card>
+
+      <v-card elevation="4" color="white" variant="elevated" class="mx-auto my-3" style="width: 300px; height: 175px;">
+        <v-card-item>
+          <div class="tiles-text">
+            <div class="spacing-10"/>
+            <v-tooltip location="bottom start" open-on-hover open-delay="200" close-delay="200">
+              <template #activator="{ props }">
+                <div v-bind="props" class="text-h6 mb-1">Copilot Contribution %</div>
+              </template>
+              <v-card class="pa-2" style="background-color: #f0f0f0; max-width: 350px;">
+                <span class="text-caption" style="font-size: 10px !important;">The percentage of code written by GitHub Copilot compared to total lines added across all repositories in the organization. This is calculated using real commit data from your organization's repositories within the selected date range.</span>
+              </v-card>
+            </v-tooltip>
+            <div class="text-caption">
+              {{ dateRangeDescription }}
+            </div>
+            <p v-if="!loadingRepoStats && totalOrgLinesAdded > 0" class="text-h4">~{{ copilotContributionPercentage.toFixed(2) }}%</p>
+            <p v-else-if="loadingRepoStats" class="text-h6">Loading...</p>
+            <p v-else class="text-caption" style="color: #888;">
+              <span v-if="cumulativeNumberLOCAccepted === 0">No Copilot data yet</span>
+              <span v-else>Check console</span>
+            </p>
+          </div>
+        </v-card-item>
+      </v-card>
     </div>
 
     <v-main class="p-1" style="min-height: 300px;">
@@ -199,6 +244,11 @@ export default defineComponent({
     const cumulativeNumberAcceptances = ref(0);
     const cumulativeNumberLOCAccepted = ref(0);
     const totalLinesSuggested = ref(0);
+    
+    // Repository stats for Copilot contribution
+    const loadingRepoStats = ref(false);
+    const totalOrgLinesAdded = ref(0);
+    const copilotContributionPercentage = ref(0);
 
     //Acceptance Rate by lines
     const acceptanceRateByLinesChartData = ref<{ labels: string[]; datasets: any[] }>({ labels: [], datasets: [] });
@@ -382,12 +432,67 @@ export default defineComponent({
       ]
     };
     
+    
+      // Fetch repository statistics after all metrics are calculated
+      // This runs inside the same watchEffect to ensure cumulativeNumberLOCAccepted is ready
+      if (data && data.length > 0) {
+        fetchRepositoryStats();
+      }
     }); // end of watchEffect
+
+    // Fetch repository statistics to calculate Copilot contribution percentage
+    const fetchRepositoryStats = async () => {
+      loadingRepoStats.value = true;
+      try {
+        const config = useRuntimeConfig();
+        const orgName = config.public.githubOrg || 'vuori-clothing';
+        
+        // Get date range from metrics if available
+        const data = toRef(props, 'metrics').value;
+        const since = data && data.length > 0 ? data[0].day : undefined;
+        const until = data && data.length > 0 ? data[data.length - 1].day : undefined;
+        
+        const params = new URLSearchParams();
+        params.append('org', orgName);
+        if (since) params.append('since', since);
+        if (until) params.append('until', until);
+        
+        console.log('Fetching repository stats with params:', params.toString());
+        
+        const response = await $fetch<{
+          totalLinesAdded: number;
+          totalLinesDeleted: number;
+          totalNetLines: number;
+          repositoryCount: number;
+        }>(`/api/repository-stats?${params.toString()}`);
+        
+        console.log('Repository stats response:', response);
+        
+        totalOrgLinesAdded.value = response.totalLinesAdded;
+        
+        // Calculate Copilot contribution percentage
+        if (totalOrgLinesAdded.value > 0 && cumulativeNumberLOCAccepted.value > 0) {
+          copilotContributionPercentage.value = (cumulativeNumberLOCAccepted.value / totalOrgLinesAdded.value) * 100;
+          console.log('Copilot contribution:', copilotContributionPercentage.value, '%');
+        } else {
+          copilotContributionPercentage.value = 0;
+          console.log('Cannot calculate contribution - totalOrgLinesAdded:', totalOrgLinesAdded.value, 'cumulativeNumberLOCAccepted:', cumulativeNumberLOCAccepted.value);
+        }
+      } catch (error) {
+        console.error('Error fetching repository statistics:', error);
+        console.error('Error details:', error instanceof Error ? error.message : String(error));
+        totalOrgLinesAdded.value = 0;
+        copilotContributionPercentage.value = 0;
+      } finally {
+        loadingRepoStats.value = false;
+      }
+    };
 
     return { totalSuggestionsAndAcceptanceChartData, chartData, 
       chartOptions, totalActiveUsersChartData, 
       totalActiveUsersChartOptions, acceptanceRateByLinesChartData, acceptanceRateByCountChartData, acceptanceRateAverageByLines, acceptanceRateAverageByCount, cumulativeNumberSuggestions, 
-      cumulativeNumberAcceptances, cumulativeNumberLOCAccepted, totalLinesSuggested };
+      cumulativeNumberAcceptances, cumulativeNumberLOCAccepted, totalLinesSuggested, 
+      loadingRepoStats, totalOrgLinesAdded, copilotContributionPercentage };
   },
   data () {
     return {
